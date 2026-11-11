@@ -28,6 +28,7 @@ import com.nova.dialer.data.ErrorLog
 import com.nova.dialer.data.NovaInCallService
 import com.nova.dialer.data.PhoneUtils
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * The in-call screen. The system shows this through NovaInCallService when
@@ -102,6 +103,10 @@ private fun CallScreenContent(onFinish: () -> Unit) {
     var held by remember { mutableStateOf(false) }
     var showKeypad by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
+    // v1.4: remember the audio route before enabling the speaker, so
+    // turning it off restores Bluetooth/earpiece instead of forcing earpiece.
+    var routeBeforeSpeaker by remember { mutableStateOf(CallAudioState.ROUTE_EARPIECE) }
+    val callScope = rememberCoroutineScope()
 
     fun safe(action: String, block: () -> Unit) {
         try { block() } catch (e: Exception) {
@@ -142,9 +147,16 @@ private fun CallScreenContent(onFinish: () -> Unit) {
 
         if (showKeypad) {
             DtmfPad(onTone = { c ->
-                safe("send tone") {
-                    call.playDtmfTone(c)
-                    call.stopDtmfTone()
+                // v1.4: play the tone for ~150ms — playing and stopping in
+                // the same frame cut the tone off before it could be heard.
+                callScope.launch {
+                    try {
+                        call.playDtmfTone(c)
+                        delay(150)
+                        call.stopDtmfTone()
+                    } catch (e: Exception) {
+                        ErrorLog.log(context, "InCall", "Failed to send tone", e)
+                    }
                 }
             })
             Spacer(Modifier.height(16.dp))
@@ -175,9 +187,14 @@ private fun CallScreenContent(onFinish: () -> Unit) {
                     CallActionButton(Icons.Filled.VolumeUp, "Speaker", speaker) {
                         speaker = !speaker
                         safe("switch speaker") {
-                            NovaInCallService.instance?.setAudioRoute(
-                                if (speaker) CallAudioState.ROUTE_SPEAKER else CallAudioState.ROUTE_EARPIECE
-                            )
+                            val service = NovaInCallService.instance
+                            if (speaker) {
+                                routeBeforeSpeaker = service?.callAudioState?.route
+                                    ?: CallAudioState.ROUTE_EARPIECE
+                                service?.setAudioRoute(CallAudioState.ROUTE_SPEAKER)
+                            } else {
+                                service?.setAudioRoute(routeBeforeSpeaker)
+                            }
                         }
                     }
                     CallActionButton(Icons.Filled.Pause, "Hold", held) {
@@ -191,6 +208,8 @@ private fun CallScreenContent(onFinish: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     CallActionButton(Icons.Filled.Dialpad, "Keypad", showKeypad) { showKeypad = !showKeypad }
                     CallActionButton(Icons.Filled.PersonAdd, "Add call", false) {
+                        // v1.4: the Hold button must show the held state too.
+                        held = true
                         safe("hold the call") { call.hold() }
                         val intent = android.content.Intent(context, MainActivity::class.java).apply {
                             flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP

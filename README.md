@@ -46,6 +46,13 @@ Minimum SDK 29 (Android 10), target SDK 35.
 
 ## Version history
 
+- **v1.4** — Full audit fixes: Recents no longer uses `LIMIT` in the
+  sort order (the same provider rejection that emptied the Gallery);
+  dialing keeps `*` and `#` so USSD codes like `*#06#` work
+  (`Uri.fromParts`); the in-call DTMF tone now plays ~150ms instead of
+  being cut off in the same frame; turning the speaker off restores the
+  previous audio route instead of forcing the earpiece; "Add call" now
+  shows the Hold state.
 - **v1.3** — The system back button now steps back — from Recents or
   Contacts to the keypad, and the error log closes — instead of exiting
   the app.

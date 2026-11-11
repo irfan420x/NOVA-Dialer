@@ -58,9 +58,13 @@ object CallRepo {
                 CallLog.Calls.TYPE, CallLog.Calls.DATE, CallLog.Calls.DURATION,
                 CallLog.Calls.PHONE_ACCOUNT_ID, CallLog.Calls.CACHED_PHOTO_URI
             )
+            // v1.4: NO LIMIT in the sort order — the MediaStore provider
+            // rejects the LIMIT token ("Invalid token LIMIT") and the
+            // CallLog provider is not guaranteed to accept it either. The
+            // caller caps the result with .take(limit) instead.
             context.contentResolver.query(
                 CallLog.Calls.CONTENT_URI, projection, null, null,
-                "${CallLog.Calls.DATE} DESC LIMIT $limit"
+                "${CallLog.Calls.DATE} DESC"
             )?.use { c ->
                 val idI = c.getColumnIndexOrThrow(CallLog.Calls._ID)
                 val numI = c.getColumnIndexOrThrow(CallLog.Calls.NUMBER)
@@ -87,7 +91,7 @@ object CallRepo {
         } catch (e: Exception) {
             ErrorLog.log(context, "Recents", "Failed to load call log", e)
         }
-        return out
+        return out.take(limit)
     }
 
     fun deleteCallLogEntries(context: Context, ids: List<Long>): Boolean {
@@ -211,25 +215,29 @@ object CallRepo {
     // ---------- Calling ----------
 
     fun placeCall(context: Context, number: String): Boolean {
-        val clean = PhoneUtils.digitsOnly(number)
-        if (clean.isEmpty()) return false
+        val dial = number.trim()
+        if (PhoneUtils.digitsOnly(dial).isEmpty()) return false
         if (!hasCallPermission(context)) {
             ErrorLog.log(context, "Call", "CALL_PHONE permission not granted")
             return false
         }
+        // v1.4: Uri.fromParts keeps * and # intact (USSD codes like *#06#
+        // or *123#). digitsOnly would strip them, and a raw Uri.parse
+        // would treat # as a fragment delimiter.
+        val telUri = Uri.fromParts("tel", dial, null)
         return try {
             val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-            tm.placeCall(Uri.parse("tel:$clean"), null)
+            tm.placeCall(telUri, null)
             true
         } catch (e: Exception) {
             try {
-                val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$clean")).apply {
+                val intent = Intent(Intent.ACTION_CALL, telUri).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
                 }
                 context.startActivity(intent)
                 true
             } catch (e2: Exception) {
-                ErrorLog.log(context, "Call", "Failed to place call to $clean", e2)
+                ErrorLog.log(context, "Call", "Failed to place call to $dial", e2)
                 false
             }
         }

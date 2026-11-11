@@ -46,6 +46,9 @@ Minimum SDK 29 (Android 10), target SDK 35.
 
 ## Version history
 
+- **v1.3** — The system back button now steps back — from Recents or
+  Contacts to the keypad, and the error log closes — instead of exiting
+  the app.
 - **v1.2** — Permission-crash fix: the Activity Result API always generates a
   permission request code of 65536 or higher, and `FragmentActivity` rejects
   any code above the lower 16 bits — so tapping "Allow access" always

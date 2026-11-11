@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.telecom.TelecomManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -166,7 +167,11 @@ fun NovaApp(initialDialNumber: String) {
     NovaTheme(darkTheme = darkTheme) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             if (showErrorLog) {
+                BackHandler { showErrorLog = false }
                 ErrorLogScreen(onBack = { showErrorLog = false })
+            } else if (tab != DialerTab.KEYPAD) {
+                // Back from Recents/Contacts goes to the keypad, not out of the app.
+                BackHandler { tab = DialerTab.KEYPAD }
                 return@Surface
             }
             if (!permissionsGranted && !skipPermissions) {

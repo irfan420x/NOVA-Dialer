@@ -46,6 +46,11 @@ Minimum SDK 29 (Android 10), target SDK 35.
 
 ## Version history
 
+- **v1.5** — Advanced: dual-SIM calling. When this phone has two SIMs,
+  placing a call asks which SIM to use — "Once" or "Always" (saved as
+  the default, changeable by tapping the SIM label on the keypad, or
+  "Ask every time"). Smart dial (T9 matches above the keypad) was
+  already in the keypad.
 - **v1.4** — Full audit fixes: Recents no longer uses `LIMIT` in the
   sort order (the same provider rejection that emptied the Gallery);
   dialing keeps `*` and `#` so USSD codes like `*#06#` work

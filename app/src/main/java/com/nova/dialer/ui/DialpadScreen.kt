@@ -59,6 +59,8 @@ fun DialpadScreen(
     number: String,
     onNumberChange: (String) -> Unit,
     lastDialed: String?,
+    simLabel: String? = null,
+    onSimClick: () -> Unit = {},
     onCall: (String) -> Unit,
     onStatus: (String) -> Unit
 ) {
@@ -111,6 +113,12 @@ fun DialpadScreen(
                 )
                 exactMatch?.let {
                     Text(it.name, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                // v1.5: dual-SIM — the saved default SIM, tap to change it.
+                simLabel?.let {
+                    TextButton(onClick = onSimClick, contentPadding = PaddingValues(0.dp)) {
+                        Text("📶 $it", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }

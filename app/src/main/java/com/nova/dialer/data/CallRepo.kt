@@ -214,7 +214,56 @@ object CallRepo {
 
     // ---------- Calling ----------
 
-    fun placeCall(context: Context, number: String): Boolean {
+    /** One callable SIM, matched to its Telecom phone account. */
+    data class SimInfo(
+        val handle: android.telecom.PhoneAccountHandle,
+        val displayName: String,
+        val carrierName: String,
+        val subId: Int
+    )
+
+    /** The SIMs that can place calls on this phone (empty when none). */
+    fun listSims(context: Context): List<SimInfo> {
+        return try {
+            val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+            val sm = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE)
+                as android.telephony.SubscriptionManager
+            val subs = try { sm.activeSubscriptionInfoList } catch (_: Exception) { null }
+                ?: return emptyList()
+            val handles = try { tm.callCapablePhoneAccounts } catch (_: Exception) { null }
+                ?: return emptyList()
+            val out = ArrayList<SimInfo>()
+            for (sub in subs) {
+                // Match the subscription to its phone account: the handle id
+                // is the subscription id on AOSP; fall back to the label.
+                val handle = handles.firstOrNull { h ->
+                    h.id == sub.subscriptionId.toString()
+                } ?: handles.firstOrNull { h ->
+                    try { tm.getPhoneAccount(h)?.label?.toString() == sub.displayName.toString() }
+                    catch (_: Exception) { false }
+                } ?: continue
+                out += SimInfo(
+                    handle = handle,
+                    displayName = sub.displayName?.toString()?.ifBlank { null } ?: "SIM ${sub.simSlotIndex + 1}",
+                    carrierName = sub.carrierName?.toString() ?: "",
+                    subId = sub.subscriptionId
+                )
+            }
+            out
+        } catch (e: Exception) {
+            ErrorLog.log(context, "Call", "Failed to list SIMs", e)
+            emptyList()
+        }
+    }
+
+    fun placeCall(context: Context, number: String): Boolean =
+        placeCall(context, number, null)
+
+    fun placeCall(
+        context: Context,
+        number: String,
+        handle: android.telecom.PhoneAccountHandle?
+    ): Boolean {
         val dial = number.trim()
         if (PhoneUtils.digitsOnly(dial).isEmpty()) return false
         if (!hasCallPermission(context)) {
@@ -227,12 +276,17 @@ object CallRepo {
         val telUri = Uri.fromParts("tel", dial, null)
         return try {
             val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-            tm.placeCall(telUri, null)
+            // v1.5: forcing a SIM (dual-SIM phones) goes through the extras.
+            val extras = android.os.Bundle().apply {
+                if (handle != null) putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, handle)
+            }
+            tm.placeCall(telUri, extras)
             true
         } catch (e: Exception) {
             try {
                 val intent = Intent(Intent.ACTION_CALL, telUri).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    if (handle != null) putExtra(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, handle)
                 }
                 context.startActivity(intent)
                 true

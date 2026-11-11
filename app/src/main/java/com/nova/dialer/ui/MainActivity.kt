@@ -126,6 +126,25 @@ fun NovaApp(initialDialNumber: String) {
 
     fun onStatus(msg: String) { status = msg }
 
+    // v1.5: dual-SIM choice. The saved default SIM (a phone-account id) is
+    // remembered in SharedPreferences; "Ask every time" clears it.
+    val prefs = remember { context.getSharedPreferences("nova_dialer", Context.MODE_PRIVATE) }
+    var defaultSimId by remember { mutableStateOf(prefs.getString("default_sim_id", null)) }
+    var simPickerNumber by remember { mutableStateOf<String?>(null) }
+    var simPickerSims by remember { mutableStateOf<List<CallRepo.SimInfo>>(emptyList()) }
+
+    fun doPlaceCall(number: String, handle: android.telecom.PhoneAccountHandle?) {
+        val clean = number.trim()
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) { CallRepo.placeCall(context, clean, handle) }
+            if (!ok) onStatus("Couldn't place the call")
+            else {
+                lastDialed = clean
+                recentsRefreshKey++
+            }
+        }
+    }
+
     fun placeCall(number: String) {
         val clean = number.trim()
         if (clean.isEmpty()) { onStatus("Type a number first"); return }
@@ -135,13 +154,28 @@ fun NovaApp(initialDialNumber: String) {
             return
         }
         scope.launch {
-            val ok = withContext(Dispatchers.IO) { CallRepo.placeCall(context, clean) }
-            if (!ok) onStatus("Couldn't place the call")
-            else {
-                lastDialed = clean
-                recentsRefreshKey++
+            val sims = withContext(Dispatchers.IO) { CallRepo.listSims(context) }
+            val saved = defaultSimId?.let { id -> sims.firstOrNull { it.handle.id == id } }
+            if (saved != null) {
+                doPlaceCall(clean, saved.handle)
+            } else if (sims.size >= 2) {
+                simPickerSims = sims
+                simPickerNumber = clean
+            } else {
+                doPlaceCall(clean, null)
             }
         }
+    }
+
+    fun pickSim(sim: CallRepo.SimInfo, always: Boolean) {
+        if (always) {
+            prefs.edit().putString("default_sim_id", sim.handle.id).apply()
+            defaultSimId = sim.handle.id
+        }
+        val number = simPickerNumber
+        simPickerNumber = null
+        simPickerSims = emptyList()
+        if (number != null) doPlaceCall(number, sim.handle)
     }
 
     fun requestDefaultDialer() {
@@ -238,6 +272,21 @@ fun NovaApp(initialDialNumber: String) {
                                 number = dialNumber,
                                 onNumberChange = { dialNumber = it },
                                 lastDialed = lastDialed,
+                                simLabel = defaultSimId?.let { id ->
+                                    simPickerSims.firstOrNull { it.handle.id == id }?.displayName
+                                        ?: "SIM"
+                                },
+                                onSimClick = {
+                                    scope.launch {
+                                        val sims = withContext(Dispatchers.IO) { CallRepo.listSims(context) }
+                                        if (sims.size >= 2) {
+                                            simPickerSims = sims
+                                            simPickerNumber = null
+                                        } else {
+                                            onStatus("Only one SIM on this phone")
+                                        }
+                                    }
+                                },
                                 onCall = { placeCall(it) },
                                 onStatus = ::onStatus
                             )
@@ -253,6 +302,50 @@ fun NovaApp(initialDialNumber: String) {
                         }
                     }
                 }
+            }
+
+            // v1.5: dual-SIM picker — shown when placing a call with two SIMs
+            // and no saved default, or when tapping the SIM label on the keypad.
+            if (simPickerSims.size >= 2) {
+                val calling = simPickerNumber
+                AlertDialog(
+                    onDismissRequest = { simPickerNumber = null; simPickerSims = emptyList() },
+                    title = { Text(if (calling != null) "Call with which SIM?" else "Default SIM") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            simPickerSims.forEach { sim ->
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(sim.displayName, fontWeight = FontWeight.Bold)
+                                        if (sim.carrierName.isNotBlank()) {
+                                            Text(sim.carrierName, style = MaterialTheme.typography.bodySmall)
+                                        }
+                                    }
+                                    Row {
+                                        TextButton(onClick = { pickSim(sim, false) }) { Text("Once") }
+                                        TextButton(onClick = { pickSim(sim, true) }) { Text("Always") }
+                                    }
+                                }
+                            }
+                            if (calling == null && defaultSimId != null) {
+                                TextButton(onClick = {
+                                    prefs.edit().remove("default_sim_id").apply()
+                                    defaultSimId = null
+                                    simPickerSims = emptyList()
+                                    onStatus("SIM choice cleared — will ask every time")
+                                }) { Text("Ask every time") }
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        TextButton(onClick = { simPickerNumber = null; simPickerSims = emptyList() }) { Text("Cancel") }
+                    }
+                )
             }
         }
     }

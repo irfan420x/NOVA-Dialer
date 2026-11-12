@@ -35,12 +35,31 @@ object PhoneUtils {
     /**
      * True when the typed digits match the contact: any word of the name
      * starts with the digit sequence in T9, or the number contains it.
+     *
+     * v1.6: the number comparison normalizes the Bangladeshi forms first —
+     * a contact stored as +8801712… now matches typed 01712… (the local
+     * form the user actually dials), and vice versa.
      */
     fun t9Matches(name: String, number: String, digits: String): Boolean {
         if (digits.isEmpty()) return false
-        if (digitsOnly(number).contains(digits)) return true
+        val stored = normalizeForMatch(digitsOnly(number))
+        val typed = normalizeForMatch(digits)
+        if (stored.contains(typed) || typed.contains(stored)) return true
         val words = name.lowercase().split(Regex("[^a-z0-9]+")).filter { it.isNotEmpty() }
         return words.any { t9Code(it).startsWith(digits) }
+    }
+
+    /**
+     * Normalize a dialed/stored number for comparison: +8801712… and
+     * 01712… and 8801712… all become "1712…". (Bangladesh country code 880.)
+     */
+    fun normalizeForMatch(digits: String): String {
+        val d = digits.removePrefix("+")
+        return when {
+            d.startsWith("880") && d.length > 10 -> d.removePrefix("880")
+            d.startsWith("0") && d.length > 10 -> d.removePrefix("0")
+            else -> d
+        }
     }
 
     /** Conservative display format: only plain 10/11-digit numbers are grouped. */

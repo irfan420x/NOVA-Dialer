@@ -74,7 +74,11 @@ object CallRepo {
                 val durI = c.getColumnIndexOrThrow(CallLog.Calls.DURATION)
                 val accI = c.getColumnIndexOrThrow(CallLog.Calls.PHONE_ACCOUNT_ID)
                 val photoI = c.getColumnIndexOrThrow(CallLog.Calls.CACHED_PHOTO_URI)
-                while (c.moveToNext()) {
+                // v1.6: resolve the account→label map ONCE before the loop —
+                // the old code made a Telecom binder call per row, and the
+                // loop walked the whole call log before .take(limit).
+                val labels = simLabels(context)
+                while (c.moveToNext() && out.size < limit) {
                     val number = c.getString(numI) ?: continue
                     out += RecentCall(
                         id = c.getLong(idI),
@@ -83,7 +87,7 @@ object CallRepo {
                         type = c.getInt(typeI),
                         date = c.getLong(dateI),
                         durationSeconds = c.getLong(durI),
-                        simLabel = simLabel(context, c.getString(accI)),
+                        simLabel = labels[c.getString(accI)],
                         photoUri = c.getString(photoI)
                     )
                 }
@@ -91,7 +95,7 @@ object CallRepo {
         } catch (e: Exception) {
             ErrorLog.log(context, "Recents", "Failed to load call log", e)
         }
-        return out.take(limit)
+        return out
     }
 
     fun deleteCallLogEntries(context: Context, ids: List<Long>): Boolean {
@@ -120,6 +124,16 @@ object CallRepo {
             ErrorLog.log(context, "Recents", "Failed to clear missed calls", e)
             false
         }
+    }
+
+    /** Phone-account id → display label, resolved once per load. */
+    private fun simLabels(context: Context): Map<String, String> {
+        return try {
+            val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+            tm.callCapablePhoneAccounts.associate { handle ->
+                handle.id to (tm.getPhoneAccount(handle)?.label?.toString() ?: handle.id)
+            }
+        } catch (_: Exception) { emptyMap() }
     }
 
     private fun simLabel(context: Context, accountId: String?): String? {
@@ -234,14 +248,28 @@ object CallRepo {
                 ?: return emptyList()
             val out = ArrayList<SimInfo>()
             for (sub in subs) {
-                // Match the subscription to its phone account: the handle id
-                // is the subscription id on AOSP; fall back to the label.
-                val handle = handles.firstOrNull { h ->
-                    h.id == sub.subscriptionId.toString()
-                } ?: handles.firstOrNull { h ->
-                    try { tm.getPhoneAccount(h)?.label?.toString() == sub.displayName.toString() }
-                    catch (_: Exception) { false }
-                } ?: continue
+                // v1.6: match the subscription to its phone account with
+                // several strategies, because no single one is reliable on
+                // every OEM. (There is NO SubscriptionManager API that
+                // returns a PhoneAccountHandle — the earlier attempt to call
+                // one did not compile.) AOSP uses the subscription id as the
+                // handle id; some OEMs use the slot index; the subscription
+                // address (line-1 number) is a third check.
+                val handle = handles.firstOrNull { h -> h.id == sub.subscriptionId.toString() }
+                    ?: handles.firstOrNull { h -> h.id == sub.simSlotIndex.toString() }
+                    ?: handles.firstOrNull { h ->
+                        try {
+                            val acct = tm.getPhoneAccount(h) ?: return@firstOrNull false
+                            val subAddr = acct.subscriptionAddress?.schemeSpecificPart
+                            val subNumber = try { sub.number } catch (_: Exception) { null }
+                            !subAddr.isNullOrBlank() && !subNumber.isNullOrBlank() &&
+                                PhoneUtils.digitsOnly(subAddr) == PhoneUtils.digitsOnly(subNumber)
+                        } catch (_: Exception) { false }
+                    }
+                    ?: handles.firstOrNull { h ->
+                        try { tm.getPhoneAccount(h)?.label?.toString() == sub.displayName.toString() }
+                        catch (_: Exception) { false }
+                    } ?: continue
                 out += SimInfo(
                     handle = handle,
                     displayName = sub.displayName?.toString()?.ifBlank { null } ?: "SIM ${sub.simSlotIndex + 1}",

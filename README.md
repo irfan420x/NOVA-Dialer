@@ -46,24 +46,34 @@ Minimum SDK 29 (Android 10), target SDK 35.
 
 ## Version history
 
+- **v1.6** — Audit bug fixes: the Recents and Contacts tabs showed a blank
+  screen (`return@Surface` ran before the Scaffold was composed, so 2 of 3
+  tabs never worked); the Error Log screen was invisible (composed under the
+  main Scaffold); `WRITE_CALL_LOG` is now requested at runtime, so delete
+  from log / clear missed no longer silently fail; dual-SIM matching is now
+  multi-strategy (subscription id, slot index, subscription address, label)
+  instead of id-or-label only; the keypad SIM label is loaded at startup;
+  Recents resolves the SIM label map once instead of one Telecom call per
+  row; T9 now matches Bangladeshi local-form numbers (`01712…` matches a
+  contact stored as `+8801712…`).
 - **v1.5** — Advanced: dual-SIM calling. When this phone has two SIMs,
-  placing a call asks which SIM to use — "Once" or "Always" (saved as
+  placing a call asks which SIM to use — \"Once\" or \"Always\" (saved as
   the default, changeable by tapping the SIM label on the keypad, or
-  "Ask every time"). Smart dial (T9 matches above the keypad) was
+  \"Ask every time\"). Smart dial (T9 matches above the keypad) was
   already in the keypad.
 - **v1.4** — Full audit fixes: Recents no longer uses `LIMIT` in the
   sort order (the same provider rejection that emptied the Gallery);
   dialing keeps `*` and `#` so USSD codes like `*#06#` work
   (`Uri.fromParts`); the in-call DTMF tone now plays ~150ms instead of
   being cut off in the same frame; turning the speaker off restores the
-  previous audio route instead of forcing the earpiece; "Add call" now
+  previous audio route instead of forcing the earpiece; \"Add call\" now
   shows the Hold state.
 - **v1.3** — The system back button now steps back — from Recents or
   Contacts to the keypad, and the error log closes — instead of exiting
   the app.
 - **v1.2** — Permission-crash fix: the Activity Result API always generates a
   permission request code of 65536 or higher, and `FragmentActivity` rejects
-  any code above the lower 16 bits — so tapping "Allow access" always
+  any code above the lower 16 bits — so tapping \"Allow access\" always
   crashed. `MainActivity` now extends `ComponentActivity`.
 - **v1.1** — Launch-crash fix: the manifest pointed the launcher at
   `com.nova.dialer.MainActivity`, but the class lives in

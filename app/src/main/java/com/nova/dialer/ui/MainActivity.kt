@@ -37,6 +37,7 @@ enum class DialerTab { KEYPAD, RECENTS, CONTACTS }
 private val REQUIRED_PERMISSIONS = arrayOf(
     Manifest.permission.READ_CONTACTS,
     Manifest.permission.READ_CALL_LOG,
+    Manifest.permission.WRITE_CALL_LOG,
     Manifest.permission.CALL_PHONE,
     Manifest.permission.READ_PHONE_STATE
 )
@@ -132,6 +133,12 @@ fun NovaApp(initialDialNumber: String) {
     var defaultSimId by remember { mutableStateOf(prefs.getString("default_sim_id", null)) }
     var simPickerNumber by remember { mutableStateOf<String?>(null) }
     var simPickerSims by remember { mutableStateOf<List<CallRepo.SimInfo>>(emptyList()) }
+    // v1.6: load the SIM list at startup so the keypad label shows the
+    // real SIM name on a fresh launch (it was "SIM" until the picker opened).
+    var allSims by remember { mutableStateOf<List<CallRepo.SimInfo>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        allSims = withContext(Dispatchers.IO) { CallRepo.listSims(context) }
+    }
 
     fun doPlaceCall(number: String, handle: android.telecom.PhoneAccountHandle?) {
         val clean = number.trim()
@@ -203,10 +210,11 @@ fun NovaApp(initialDialNumber: String) {
             if (showErrorLog) {
                 BackHandler { showErrorLog = false }
                 ErrorLogScreen(onBack = { showErrorLog = false })
-            } else if (tab != DialerTab.KEYPAD) {
+                return@Surface
+            }
+            if (tab != DialerTab.KEYPAD) {
                 // Back from Recents/Contacts goes to the keypad, not out of the app.
                 BackHandler { tab = DialerTab.KEYPAD }
-                return@Surface
             }
             if (!permissionsGranted && !skipPermissions) {
                 PermissionScreen(
@@ -273,7 +281,7 @@ fun NovaApp(initialDialNumber: String) {
                                 onNumberChange = { dialNumber = it },
                                 lastDialed = lastDialed,
                                 simLabel = defaultSimId?.let { id ->
-                                    simPickerSims.firstOrNull { it.handle.id == id }?.displayName
+                                    allSims.firstOrNull { it.handle.id == id }?.displayName
                                         ?: "SIM"
                                 },
                                 onSimClick = {

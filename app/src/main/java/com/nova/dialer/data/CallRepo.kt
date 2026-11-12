@@ -143,16 +143,6 @@ object CallRepo {
         } catch (_: Exception) { emptyMap() }
     }
 
-    private fun simLabel(context: Context, accountId: String?): String? {
-        if (accountId.isNullOrBlank()) return null
-        return try {
-            val tm = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
-            tm.callCapablePhoneAccounts
-                .firstOrNull { it.id == accountId }
-                ?.let { tm.getPhoneAccount(it)?.label?.toString() }
-        } catch (_: Exception) { null }
-    }
-
     // ---------- Contacts ----------
 
     fun loadContacts(context: Context, limit: Int = 2000): List<ContactItem> {
@@ -184,7 +174,10 @@ object CallRepo {
                 while (c.moveToNext() && out.size < limit) {
                     val name = c.getString(nameI) ?: continue
                     val number = c.getString(numI) ?: continue
-                    out += ContactItem(
+                    // v1.8: one row per phone number means a contact with
+                    // two numbers appears twice in the list. Keep one row
+                    // per contact — the most-called number wins.
+                    val item = ContactItem(
                         id = c.getLong(idI),
                         contactId = c.getLong(contactI),
                         lookupKey = c.getString(lookupI) ?: "",
@@ -194,6 +187,9 @@ object CallRepo {
                         starred = c.getInt(starI) == 1,
                         timesContacted = c.getInt(timesI)
                     )
+                    val existing = out.indexOfFirst { it.contactId == item.contactId }
+                    if (existing < 0) out += item
+                    else if (item.timesContacted > out[existing].timesContacted) out[existing] = item
                 }
             }
         } catch (e: Exception) {
@@ -210,14 +206,7 @@ object CallRepo {
         val all = loadContacts(context)
         val q = query.trim()
         if (q.isEmpty()) return all
-        val digits = PhoneUtils.digitsOnly(q)
-        return all.filter { c ->
-            if (digits.isNotEmpty() && digits.all { it.isDigit() } && digits.length >= 2) {
-                PhoneUtils.t9Matches(c.name, c.number, digits)
-            } else {
-                c.name.contains(q, ignoreCase = true) || PhoneUtils.digitsOnly(c.number).contains(digits)
-            }
-        }
+        return all.filter { PhoneUtils.contactMatchesQuery(it.name, it.number, q) }
     }
 
     fun setStarred(context: Context, contactId: Long, starred: Boolean): Boolean {
@@ -332,10 +321,19 @@ object CallRepo {
         }
     }
 
-    fun voicemailNumber(context: Context): String? {
+    /**
+     * Voicemail number for a SIM. v1.8: the old code always read the
+     * default TelephonyManager, which is SIM 1's voicemail even when the
+     * user's default SIM is SIM 2. Pass the default SIM's subscription id
+     * (from listSims) to read that SIM's number instead.
+     */
+    fun voicemailNumber(context: Context, subId: Int? = null): String? {
         return try {
             val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-            tm.voiceMailNumber
+            if (subId != null) {
+                try { tm.createForSubscriptionId(subId).voiceMailNumber } catch (_: Exception) { null }
+                    ?: tm.voiceMailNumber
+            } else tm.voiceMailNumber
         } catch (_: Exception) { null }
     }
 
@@ -357,11 +355,44 @@ object CallRepo {
                 }
                 context.contentResolver.insert(BlockedNumberContract.BlockedNumbers.CONTENT_URI, values) != null
             } else {
-                context.contentResolver.delete(
+                // v1.8: unblocking by exact ORIGINAL_NUMBER failed silently
+                // whenever the stored form differed from the call-log form
+                // (e.g. blocked as +8801712… from another app, shown here
+                // as 01712…). Match on the normalized number instead and
+                // delete the matching rows by _ID.
+                val ids = ArrayList<Long>()
+                context.contentResolver.query(
                     BlockedNumberContract.BlockedNumbers.CONTENT_URI,
-                    "${BlockedNumberContract.BlockedNumbers.COLUMN_ORIGINAL_NUMBER} = ?",
-                    arrayOf(PhoneUtils.digitsOnly(number))
-                ) > 0
+                    arrayOf(
+                        android.provider.BaseColumns._ID,
+                        BlockedNumberContract.BlockedNumbers.COLUMN_ORIGINAL_NUMBER
+                    ),
+                    null, null, null
+                )?.use { c ->
+                    val idI = c.getColumnIndexOrThrow(android.provider.BaseColumns._ID)
+                    val numI = c.getColumnIndexOrThrow(BlockedNumberContract.BlockedNumbers.COLUMN_ORIGINAL_NUMBER)
+                    while (c.moveToNext()) {
+                        if (PhoneUtils.sameNumber(c.getString(numI) ?: "", number)) {
+                            ids += c.getLong(idI)
+                        }
+                    }
+                }
+                if (ids.isEmpty()) {
+                    // No row matched even loosely — fall back to the exact
+                    // delete so a same-form row is still removed.
+                    context.contentResolver.delete(
+                        BlockedNumberContract.BlockedNumbers.CONTENT_URI,
+                        "${BlockedNumberContract.BlockedNumbers.COLUMN_ORIGINAL_NUMBER} = ?",
+                        arrayOf(PhoneUtils.digitsOnly(number))
+                    ) > 0
+                } else {
+                    val placeholders = ids.joinToString(",") { "?" }
+                    context.contentResolver.delete(
+                        BlockedNumberContract.BlockedNumbers.CONTENT_URI,
+                        "${android.provider.BaseColumns._ID} IN ($placeholders)",
+                        ids.map { it.toString() }.toTypedArray()
+                    ) > 0
+                }
             }
         } catch (e: Exception) {
             ErrorLog.log(context, "Block", "Failed to ${if (blocked) "block" else "unblock"} $number", e)

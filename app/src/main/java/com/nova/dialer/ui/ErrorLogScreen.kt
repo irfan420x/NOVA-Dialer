@@ -5,7 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
@@ -28,12 +28,17 @@ fun ErrorLogScreen(onBack: () -> Unit) {
                 title = { Text("Error log") },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, "Back") } },
                 actions = {
-                    TextButton(onClick = {
-                        val text = entries.joinToString("\n---\n")
-                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("NOVA Dialer error log", text))
-                        status = "Copied — paste it in a message to share it"
-                    }) { Text("Copy") }
+                    // v1.8: Copy on an empty log claimed "Copied" while
+                    // copying nothing.
+                    TextButton(
+                        onClick = {
+                            val text = entries.joinToString("\n---\n")
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("NOVA Dialer error log", text))
+                            status = "Copied — paste it in a message to share it"
+                        },
+                        enabled = entries.isNotEmpty()
+                    ) { Text("Copy") }
                     TextButton(onClick = {
                         ErrorLog.clear(context)
                         entries = emptyList()
@@ -57,7 +62,7 @@ fun ErrorLogScreen(onBack: () -> Unit) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No errors recorded.") }
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(entries) { e ->
+                    itemsIndexed(entries, key = { index, _ -> index }) { _, e ->
                         Card(Modifier.fillMaxWidth()) {
                             Text(e, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
                         }

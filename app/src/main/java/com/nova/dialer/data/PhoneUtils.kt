@@ -72,6 +72,32 @@ object PhoneUtils {
         }
     }
 
+    /** True when two numbers are the same number in any form (+880/880/017). */
+    fun sameNumber(a: String, b: String): Boolean {
+        val na = normalizeForMatch(digitsOnly(a))
+        val nb = normalizeForMatch(digitsOnly(b))
+        return na.isNotEmpty() && na == nb
+    }
+
+    /**
+     * One shared matcher for the Contacts tab filter and searchContacts.
+     * v1.8: the old inline filters had a `contains("")` tautology — for a
+     * pure-letter query digitsOnly is "", and `number.contains("")` is
+     * always true, so searching "Rahim" returned EVERY contact. The
+     * number-contains leg now requires a non-empty digit query, and a
+     * '+'-prefixed query goes through T9 like any other digits.
+     */
+    fun contactMatchesQuery(name: String, number: String, query: String): Boolean {
+        val q = query.trim()
+        if (q.isEmpty()) return true
+        val digits = digitsOnly(q).removePrefix("+")
+        if (digits.isNotEmpty() && digits.all { it.isDigit() } && digits.length >= 2) {
+            return t9Matches(name, number, digits)
+        }
+        return name.contains(q, ignoreCase = true) ||
+            (digits.isNotEmpty() && digitsOnly(number).contains(digits))
+    }
+
     /** Conservative display format: only plain 10/11-digit numbers are grouped. */
     fun prettyNumber(number: String): String {
         val d = digitsOnly(number)

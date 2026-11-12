@@ -29,6 +29,7 @@ import androidx.core.content.ContextCompat
 import com.nova.dialer.data.CallRepo
 import com.nova.dialer.data.ErrorLog
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -44,6 +45,12 @@ private val REQUIRED_PERMISSIONS = arrayOf(
 
 class MainActivity : ComponentActivity() {
 
+    // v1.8: the dial number can arrive twice — once at launch (tel: link or
+    // ACTION_DIAL) and again while the app is already running (a second
+    // tel: link, or the in-call screen's "Add call" returning here). The
+    // flow carries both; NovaApp syncs the keypad from it.
+    private val dialNumberFlow = MutableStateFlow("")
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Record every crash in the in-app error log (same pattern as NOVA Files).
@@ -55,8 +62,16 @@ class MainActivity : ComponentActivity() {
             defaultHandler?.uncaughtException(thread, e)
         }
         // A tel: link (or ACTION_DIAL) opens the keypad with the number filled in.
-        val dialNumber = intent?.data?.takeIf { it.scheme == "tel" }?.schemeSpecificPart ?: ""
-        setContent { NovaApp(dialNumber) }
+        dialNumberFlow.value =
+            intent?.data?.takeIf { it.scheme == "tel" }?.schemeSpecificPart ?: ""
+        setContent { NovaApp(dialNumberFlow) }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.data?.takeIf { it.scheme == "tel" }?.schemeSpecificPart
+            ?.takeIf { it.isNotBlank() }?.let { dialNumberFlow.value = it }
     }
 }
 
@@ -77,14 +92,15 @@ private fun isDefaultDialer(context: Context): Boolean {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NovaApp(initialDialNumber: String) {
+fun NovaApp(dialNumberFlow: MutableStateFlow<String>) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var tab by remember { mutableStateOf(DialerTab.KEYPAD) }
-    var dialNumber by remember { mutableStateOf(initialDialNumber) }
+    var dialNumber by remember { mutableStateOf(dialNumberFlow.value) }
     var darkTheme by remember { mutableStateOf(loadDarkTheme(context)) }
     var showErrorLog by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
+    var statusTick by remember { mutableStateOf(0) }
     var recentsRefreshKey by remember { mutableStateOf(0) }
     var lastDialed by remember { mutableStateOf<String?>(null) }
     var permissionsGranted by remember {
@@ -94,11 +110,18 @@ fun NovaApp(initialDialNumber: String) {
     }
     var skipPermissions by remember { mutableStateOf(false) }
     var isDefault by remember { mutableStateOf(isDefaultDialer(context)) }
+    // v1.8: the number to call once the permission prompt is answered —
+    // placeCall used to give up here and never retry after a grant.
+    var pendingCallNumber by remember { mutableStateOf<String?>(null) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
         permissionsGranted = REQUIRED_PERMISSIONS.all { results[it] == true }
+        // Denied: drop the pending call — retrying it later (e.g. after a
+        // grant from the permission screen) would place a call the user
+        // never confirmed after the denial.
+        if (!permissionsGranted) pendingCallNumber = null
         scope.launch {
             lastDialed = withContext(Dispatchers.IO) {
                 CallRepo.loadRecents(context, 50)
@@ -110,22 +133,19 @@ fun NovaApp(initialDialNumber: String) {
         ActivityResultContracts.StartActivityForResult()
     ) { isDefault = isDefaultDialer(context) }
 
-    LaunchedEffect(Unit) {
-        if (permissionsGranted) {
-            lastDialed = withContext(Dispatchers.IO) {
-                CallRepo.loadRecents(context, 50)
-                    .firstOrNull { it.type == android.provider.CallLog.Calls.OUTGOING_TYPE }?.number
-            }
-        }
+    // v1.8: a tel: link arriving while the app runs fills the keypad.
+    val intentDialNumber by dialNumberFlow.collectAsState()
+    LaunchedEffect(intentDialNumber) {
+        if (intentDialNumber.isNotBlank()) dialNumber = intentDialNumber
     }
-    LaunchedEffect(status) {
+    LaunchedEffect(statusTick) {
         if (status != null) {
             kotlinx.coroutines.delay(3000)
             status = null
         }
     }
 
-    fun onStatus(msg: String) { status = msg }
+    fun onStatus(msg: String) { status = msg; statusTick++ }
 
     // v1.5: dual-SIM choice. The saved default SIM (a phone-account id) is
     // remembered in SharedPreferences; "Ask every time" clears it.
@@ -136,8 +156,31 @@ fun NovaApp(initialDialNumber: String) {
     // v1.6: load the SIM list at startup so the keypad label shows the
     // real SIM name on a fresh launch (it was "SIM" until the picker opened).
     var allSims by remember { mutableStateOf<List<CallRepo.SimInfo>>(emptyList()) }
-    LaunchedEffect(Unit) {
-        allSims = withContext(Dispatchers.IO) { CallRepo.listSims(context) }
+    // v1.8: re-check everything on every resume — a permission granted in
+    // Settings, the default-dialer role set elsewhere, or a SIM swapped
+    // used to be invisible until the app was killed and restarted.
+    // (ON_RESUME also fires on first launch, so this is the only load.)
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                permissionsGranted = REQUIRED_PERMISSIONS.all {
+                    ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+                }
+                isDefault = isDefaultDialer(context)
+                scope.launch {
+                    allSims = withContext(Dispatchers.IO) { CallRepo.listSims(context) }
+                    if (permissionsGranted) {
+                        lastDialed = withContext(Dispatchers.IO) {
+                            CallRepo.loadRecents(context, 50)
+                                .firstOrNull { it.type == android.provider.CallLog.Calls.OUTGOING_TYPE }?.number
+                        }
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     fun doPlaceCall(number: String, handle: android.telecom.PhoneAccountHandle?) {
@@ -156,6 +199,9 @@ fun NovaApp(initialDialNumber: String) {
         val clean = number.trim()
         if (clean.isEmpty()) { onStatus("Type a number first"); return }
         if (!CallRepo.hasCallPermission(context)) {
+            // v1.8: remember the number and retry it when the grant lands
+            // (see the effect below) instead of dropping the call.
+            pendingCallNumber = clean
             permissionLauncher.launch(REQUIRED_PERMISSIONS)
             onStatus("Call permission is needed to place calls")
             return
@@ -171,6 +217,15 @@ fun NovaApp(initialDialNumber: String) {
             } else {
                 doPlaceCall(clean, null)
             }
+        }
+    }
+
+    // v1.8: retry the pending call once the permission grant lands.
+    LaunchedEffect(permissionsGranted, pendingCallNumber) {
+        val pending = pendingCallNumber
+        if (permissionsGranted && pending != null) {
+            pendingCallNumber = null
+            placeCall(pending)
         }
     }
 
@@ -284,14 +339,25 @@ fun NovaApp(initialDialNumber: String) {
                                     allSims.firstOrNull { it.handle.id == id }?.displayName
                                         ?: "SIM"
                                 },
+                                defaultSimSubId = defaultSimId?.let { id ->
+                                    allSims.firstOrNull { it.handle.id == id }?.subId
+                                },
                                 onSimClick = {
                                     scope.launch {
                                         val sims = withContext(Dispatchers.IO) { CallRepo.listSims(context) }
-                                        if (sims.size >= 2) {
-                                            simPickerSims = sims
-                                            simPickerNumber = null
-                                        } else {
-                                            onStatus("Only one SIM on this phone")
+                                        when {
+                                            sims.size >= 2 -> {
+                                                simPickerSims = sims
+                                                simPickerNumber = null
+                                            }
+                                            sims.size == 1 -> onStatus("Only one SIM on this phone")
+                                            // v1.8: an empty list used to
+                                            // report "Only one SIM" even when
+                                            // the SIM list could not be read
+                                            // at all (permission off).
+                                            !CallRepo.hasPermission(context, Manifest.permission.READ_PHONE_STATE) ->
+                                                onStatus("Couldn't read SIM info — phone permission is off")
+                                            else -> onStatus("No SIM found on this phone")
                                         }
                                     }
                                 },
@@ -301,11 +367,13 @@ fun NovaApp(initialDialNumber: String) {
                             DialerTab.RECENTS -> RecentsScreen(
                                 refreshKey = recentsRefreshKey,
                                 onCall = { placeCall(it) },
-                                onStatus = ::onStatus
+                                onStatus = ::onStatus,
+                                onRequestPermissions = { permissionLauncher.launch(REQUIRED_PERMISSIONS) }
                             )
                             DialerTab.CONTACTS -> ContactsScreen(
                                 onCall = { placeCall(it) },
-                                onStatus = ::onStatus
+                                onStatus = ::onStatus,
+                                onRequestPermissions = { permissionLauncher.launch(REQUIRED_PERMISSIONS) }
                             )
                         }
                     }

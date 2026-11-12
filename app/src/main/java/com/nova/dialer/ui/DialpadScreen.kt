@@ -60,6 +60,9 @@ fun DialpadScreen(
     onNumberChange: (String) -> Unit,
     lastDialed: String?,
     simLabel: String? = null,
+    // v1.8: the default SIM's subscription id, so long-press 1 calls the
+    // voicemail of the SIM the user actually uses (was always SIM 1's).
+    defaultSimSubId: Int? = null,
     onSimClick: () -> Unit = {},
     onCall: (String) -> Unit,
     onStatus: (String) -> Unit
@@ -98,8 +101,11 @@ fun DialpadScreen(
     val exactMatch = remember(number, contacts) {
         val d = PhoneUtils.digitsOnly(number)
         if (d.isEmpty()) null
-        else contacts.firstOrNull { PhoneUtils.digitsOnly(it.number) == d }
-            ?: contacts.firstOrNull { PhoneUtils.digitsOnly(it.number).endsWith(d) && d.length >= 7 }
+        // v1.8: normalized equality ONLY. The old endsWith fallback
+        // (7+ digits) matched any number sharing a tail — typing
+        // "1234567" showed the FIRST contact whose number ended that way,
+        // which could be the wrong person entirely.
+        else contacts.firstOrNull { PhoneUtils.sameNumber(it.number, d) }
     }
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
@@ -131,7 +137,7 @@ fun DialpadScreen(
         // T9 results.
         if (t9Results.isNotEmpty()) {
             LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false)) {
-                items(t9Results) { c ->
+                items(t9Results, key = { it.id }) { c ->
                     ListItem(
                         headlineContent = { Text(c.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         supportingContent = { Text(PhoneUtils.prettyNumber(c.number)) },
@@ -166,7 +172,7 @@ fun DialpadScreen(
                                     else press(c)
                                 }
                                 '1' -> {
-                                    val vm = CallRepo.voicemailNumber(context)
+                                    val vm = CallRepo.voicemailNumber(context, defaultSimSubId)
                                     if (vm.isNullOrBlank()) onStatus("No voicemail number on this phone")
                                     else onCall(vm)
                                 }

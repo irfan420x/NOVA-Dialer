@@ -23,12 +23,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.nova.dialer.data.CallRepo
 import com.nova.dialer.data.CallStateHolder
 import com.nova.dialer.data.ErrorLog
 import com.nova.dialer.data.NovaInCallService
 import com.nova.dialer.data.PhoneUtils
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The in-call screen. The system shows this through NovaInCallService when
@@ -89,13 +93,24 @@ private fun CallScreenContent(onFinish: () -> Unit) {
     // by NovaInCallService) is the way back if the user leaves via Home.
     androidx.activity.compose.BackHandler { }
 
-    // Call timer: starts the moment the call becomes active and keeps
+    // Call timer: starts the moment a call becomes active and keeps
     // counting through hold — it only stops when the call disconnects.
+    // v1.8: the timer is keyed to the CALL, not just the state — with call
+    // waiting the old code kept the first call's start time for the second
+    // call, so the second call showed the first call's elapsed time.
     var activeSince by remember { mutableStateOf<Long?>(null) }
+    var timedCall by remember { mutableStateOf<Call?>(null) }
     var elapsed by remember { mutableStateOf(0L) }
-    LaunchedEffect(state) {
-        if (state == Call.STATE_ACTIVE && activeSince == null) activeSince = System.currentTimeMillis()
-        if (state == Call.STATE_DISCONNECTED) activeSince = null
+    LaunchedEffect(state, call) {
+        if (state == Call.STATE_ACTIVE && timedCall !== call) {
+            timedCall = call
+            activeSince = System.currentTimeMillis()
+            elapsed = 0
+        }
+        if (state == Call.STATE_DISCONNECTED) {
+            activeSince = null
+            timedCall = null
+        }
     }
     LaunchedEffect(activeSince) {
         while (activeSince != null) {
@@ -106,9 +121,33 @@ private fun CallScreenContent(onFinish: () -> Unit) {
 
     var muted by remember { mutableStateOf(false) }
     var speaker by remember { mutableStateOf(false) }
-    var held by remember { mutableStateOf(false) }
     var showKeypad by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
+    var statusTick by remember { mutableStateOf(0) }
+    // v1.8: status clears 3s after the LAST message — the old effect only
+    // re-ran when the text changed, so repeating the same message never
+    // reset its timer.
+    LaunchedEffect(statusTick) {
+        if (status != null) {
+            delay(3000)
+            status = null
+        }
+    }
+    fun setStatus(msg: String) { status = msg; statusTick++ }
+    // v1.8: hold is derived from the call itself, not remembered — a
+    // remembered flag went stale across call-waiting switches and add-call.
+    val held = state == Call.STATE_HOLDING
+    // v1.8: the SIM list for the choose-SIM state (see below).
+    var pickerSims by remember { mutableStateOf<List<CallRepo.SimInfo>?>(null) }
+    LaunchedEffect(state) {
+        if (state == Call.STATE_SELECT_PHONE_ACCOUNT) {
+            pickerSims = withContext(Dispatchers.IO) { CallRepo.listSims(context) }
+        }
+    }
+    // v1.8: DTMF tones are serialized through one job — rapid taps used
+    // to launch a coroutine each, and an earlier tap's stopDtmfTone() cut
+    // off the later tap's tone mid-play.
+    var dtmfJob by remember { mutableStateOf<Job?>(null) }
     // v1.4: remember the audio route before enabling the speaker, so
     // turning it off restores Bluetooth/earpiece instead of forcing earpiece.
     var routeBeforeSpeaker by remember { mutableStateOf(CallAudioState.ROUTE_EARPIECE) }
@@ -117,7 +156,7 @@ private fun CallScreenContent(onFinish: () -> Unit) {
     fun safe(action: String, block: () -> Unit) {
         try { block() } catch (e: Exception) {
             ErrorLog.log(context, "InCall", "Failed to $action", e)
-            status = "Couldn't $action"
+            setStatus("Couldn't $action")
         }
     }
 
@@ -142,7 +181,14 @@ private fun CallScreenContent(onFinish: () -> Unit) {
         Text(PhoneUtils.prettyNumber(number), color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(8.dp))
         Text(
-            if (state == Call.STATE_ACTIVE && elapsed > 0) PhoneUtils.formatDuration(elapsed) else callStateText(state),
+            when {
+                // v1.8: the timer keeps showing through hold (was hidden the
+                // moment the call was held, even though it kept counting).
+                (state == Call.STATE_ACTIVE || state == Call.STATE_HOLDING) && elapsed > 0 ->
+                    if (state == Call.STATE_HOLDING) "${PhoneUtils.formatDuration(elapsed)} • On hold"
+                    else PhoneUtils.formatDuration(elapsed)
+                else -> callStateText(state)
+            },
             color = MaterialTheme.colorScheme.primary
         )
         status?.let {
@@ -155,11 +201,18 @@ private fun CallScreenContent(onFinish: () -> Unit) {
             DtmfPad(onTone = { c ->
                 // v1.4: play the tone for ~150ms — playing and stopping in
                 // the same frame cut the tone off before it could be heard.
-                callScope.launch {
+                // v1.8: one serialized job — the previous tone is cancelled
+                // before the new one starts, so rapid taps can't clip each
+                // other (a cancelled job's stop is skipped, because the new
+                // tone has already replaced the old one).
+                dtmfJob?.cancel()
+                dtmfJob = callScope.launch {
                     try {
                         call.playDtmfTone(c)
                         delay(150)
                         call.stopDtmfTone()
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         ErrorLog.log(context, "InCall", "Failed to send tone", e)
                     }
@@ -181,6 +234,46 @@ private fun CallScreenContent(onFinish: () -> Unit) {
                     modifier = Modifier.size(72.dp),
                     colors = IconButtonDefaults.filledIconButtonColors(containerColor = NovaGood)
                 ) { Icon(Icons.Filled.Call, "Answer", Modifier.size(32.dp)) }
+            }
+        } else if (state == Call.STATE_SELECT_PHONE_ACCOUNT) {
+            // v1.8: "Choose SIM" used to be a dead end — text with no
+            // picker at all (e.g. when READ_PHONE_STATE was denied and no
+            // SIM could be picked up front). Now the SIMs are listed and
+            // the choice goes back to Telecom with phoneAccountSelected.
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    "Choose a SIM for this call",
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(16.dp))
+                when (val sims = pickerSims) {
+                    null -> CircularProgressIndicator()
+                    emptyList<CallRepo.SimInfo>() -> {
+                        Text(
+                            "No SIM could be read — check the phone permission, then try again.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(Modifier.height(16.dp))
+                    }
+                    else -> sims.forEach { sim ->
+                        OutlinedButton(
+                            onClick = {
+                                safe("select a SIM") { call.phoneAccountSelected(sim.handle, false) }
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                        ) {
+                            Text(sim.displayName + if (sim.carrierName.isNotBlank()) " • ${sim.carrierName}" else "")
+                        }
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                FilledIconButton(
+                    onClick = { safe("end the call") { call.disconnect() } },
+                    modifier = Modifier.size(72.dp),
+                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = NovaMissed)
+                ) { Icon(Icons.Filled.CallEnd, "Cancel call", Modifier.size(32.dp)) }
             }
         } else {
             // Active / dialing: mute, speaker, hold, keypad, add call, end.
@@ -204,27 +297,33 @@ private fun CallScreenContent(onFinish: () -> Unit) {
                     Spacer(Modifier.height(16.dp))
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    // v1.8: the buttons used to flip their UI state BEFORE
+                    // the service/call was invoked, and a null service was
+                    // a silent no-op — the UI showed "muted" while nothing
+                    // was muted. Now the state flips only after the call
+                    // succeeds, and a missing service says so.
                     CallActionButton(Icons.Filled.MicOff, "Mute", muted) {
-                        muted = !muted
-                        safe("mute") { NovaInCallService.instance?.setMuted(muted) }
+                        val service = NovaInCallService.instance
+                        if (service == null) setStatus("Couldn't mute — call service unavailable")
+                        else safe("mute") { service.setMuted(!muted); muted = !muted }
                     }
                     CallActionButton(Icons.Filled.VolumeUp, "Speaker", speaker) {
-                        speaker = !speaker
-                        safe("switch speaker") {
-                            val service = NovaInCallService.instance
-                            if (speaker) {
-                                routeBeforeSpeaker = service?.callAudioState?.route
+                        val service = NovaInCallService.instance
+                        if (service == null) setStatus("Couldn't switch speaker — call service unavailable")
+                        else safe("switch speaker") {
+                            if (!speaker) {
+                                routeBeforeSpeaker = service.callAudioState?.route
                                     ?: CallAudioState.ROUTE_EARPIECE
-                                service?.setAudioRoute(CallAudioState.ROUTE_SPEAKER)
+                                service.setAudioRoute(CallAudioState.ROUTE_SPEAKER)
                             } else {
-                                service?.setAudioRoute(routeBeforeSpeaker)
+                                service.setAudioRoute(routeBeforeSpeaker)
                             }
+                            speaker = !speaker
                         }
                     }
                     CallActionButton(Icons.Filled.Pause, "Hold", held) {
-                        held = !held
-                        safe(if (held) "hold the call" else "resume the call") {
-                            if (held) call.hold() else call.unhold()
+                        safe(if (held) "resume the call" else "hold the call") {
+                            if (held) call.unhold() else call.hold()
                         }
                     }
                 }
@@ -232,11 +331,15 @@ private fun CallScreenContent(onFinish: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     CallActionButton(Icons.Filled.Dialpad, "Keypad", showKeypad) { showKeypad = !showKeypad }
                     CallActionButton(Icons.Filled.PersonAdd, "Add call", false) {
-                        // v1.4: the Hold button must show the held state too.
-                        held = true
                         safe("hold the call") { call.hold() }
                         val intent = android.content.Intent(context, MainActivity::class.java).apply {
-                            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP
+                            // v1.8: SINGLE_TOP stacked a second MainActivity
+                            // on top of the call screen every time (the
+                            // activity was not on top, so single-top never
+                            // deduped). REORDER_TO_FRONT reuses the existing
+                            // MainActivity and keeps the call screen below it.
+                            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                                android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                         }
                         try { context.startActivity(intent) } catch (e: Exception) {
                             ErrorLog.log(context, "InCall", "Failed to open dialer for add-call", e)

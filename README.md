@@ -46,6 +46,26 @@ Minimum SDK 29 (Android 10), target SDK 35.
 
 ## Version history
 
+- **v1.8** — Final audit: contacts name search no longer returns every
+  contact (an empty digit query matched all numbers); the keypad no longer
+  shows the wrong contact name (the `endsWith` fallback matched any number
+  sharing a tail); the "Choose SIM" dead end now shows a real SIM picker;
+  mute/speaker/hold only flip after the service call succeeds (a missing
+  service now says so instead of silently doing nothing); rapid DTMF taps
+  no longer clip each other; the call timer is per-call and shows through
+  hold; Add call no longer stacks duplicate activities; lists refresh on
+  resume; placing a call retries after the permission grant; unblock
+  matches by normalized number and reports honestly; voicemail uses the
+  default SIM; multi-number contacts no longer duplicate in the Contacts
+  tab; error-log Copy is disabled on an empty log.
+- **v1.7** — Second audit: T9 suggestions work while typing again (the
+  v1.6 normalization fix was a regression — typing `01712…` showed
+  nothing); call waiting works, with a switch button between calls;
+  pressing Back during a call no longer loses the call UI (an ongoing-call
+  notification returns to it); SIM picker "Once" no longer does nothing in
+  change-default mode; long-press 0 only inserts "+" in an empty field;
+  Recents delete reports failure honestly; unknown/private numbers no
+  longer show as blank rows.
 - **v1.6** — Audit bug fixes: the Recents and Contacts tabs showed a blank
   screen (`return@Surface` ran before the Scaffold was composed, so 2 of 3
   tabs never worked); the Error Log screen was invisible (composed under the

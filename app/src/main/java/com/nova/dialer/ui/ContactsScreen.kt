@@ -30,12 +30,19 @@ import com.nova.dialer.data.ContactItem
 import com.nova.dialer.data.ErrorLog
 import com.nova.dialer.data.PhoneUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun ContactsScreen(onCall: (String) -> Unit, onStatus: (String) -> Unit) {
+fun ContactsScreen(
+    onCall: (String) -> Unit,
+    onStatus: (String) -> Unit,
+    // v1.8: the way back to permissions after "Continue without it" —
+    // NovaApp passes the permission launcher through here.
+    onRequestPermissions: () -> Unit = {}
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
@@ -43,30 +50,40 @@ fun ContactsScreen(onCall: (String) -> Unit, onStatus: (String) -> Unit) {
     var loading by remember { mutableStateOf(true) }
     var detail by remember { mutableStateOf<ContactItem?>(null) }
 
+    // v1.8: loads are serialized — a resume reload racing a tab-switch
+    // reload used to leave stale data or a stuck spinner.
+    var loadJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     fun load() {
-        scope.launch {
+        loadJob?.cancel()
+        loadJob = scope.launch {
             loading = true
-            contacts = withContext(Dispatchers.IO) { CallRepo.loadContacts(context) }
-            loading = false
+            try {
+                val data = withContext(Dispatchers.IO) { CallRepo.loadContacts(context) }
+                if (isActive) contacts = data
+            } finally {
+                if (isActive) loading = false
+            }
         }
     }
-    LaunchedEffect(Unit) { load() }
+    // v1.8: reload on every resume, not just once — a contact added or
+    // edited in the system editor used to be invisible until restart.
+    // (ON_RESUME also fires on first launch, so this is the only load.)
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) load()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // In-memory filter (avoids re-querying the provider on every keystroke).
+    // v1.8: the shared matcher — the old inline filter returned every
+    // contact for any name query (contains("") is always true).
     val filtered = remember(query, contacts) {
         val q = query.trim()
         if (q.isEmpty()) contacts
-        else {
-            val digits = PhoneUtils.digitsOnly(q)
-            contacts.filter { c ->
-                if (digits.isNotEmpty() && digits.length >= 2 && digits.all { it.isDigit() }) {
-                    PhoneUtils.t9Matches(c.name, c.number, digits)
-                } else {
-                    c.name.contains(q, ignoreCase = true) ||
-                        PhoneUtils.digitsOnly(c.number).contains(digits)
-                }
-            }
-        }
+        else contacts.filter { PhoneUtils.contactMatchesQuery(it.name, it.number, q) }
     }
     val favorites = remember(contacts) { contacts.filter { it.starred }.distinctBy { it.lookupKey } }
     val searching = query.isNotBlank()
@@ -103,6 +120,8 @@ fun ContactsScreen(onCall: (String) -> Unit, onStatus: (String) -> Unit) {
                                 "Allow access to contacts to see them here.",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            Spacer(Modifier.height(16.dp))
+                            Button(onClick = onRequestPermissions) { Text("Allow access") }
                         }
                     }
                 }
@@ -203,7 +222,9 @@ fun ContactsScreen(onCall: (String) -> Unit, onStatus: (String) -> Unit) {
                         }
                         OutlinedButton(onClick = {
                             detail = null
-                            val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${c.number}"))
+                            // v1.8: Uri.fromParts keeps '#' in the number —
+                            // Uri.parse("smsto:…") truncated it.
+                            val intent = Intent(Intent.ACTION_SENDTO, Uri.fromParts("smsto", c.number, null))
                             try { context.startActivity(intent) } catch (e: Exception) {
                                 ErrorLog.log(context, "Contacts", "Failed to open messaging", e)
                                 onStatus("Couldn't open messages")

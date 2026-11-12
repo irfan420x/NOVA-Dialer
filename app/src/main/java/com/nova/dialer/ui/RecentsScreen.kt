@@ -32,6 +32,7 @@ import com.nova.dialer.data.ErrorLog
 import com.nova.dialer.data.PhoneUtils
 import com.nova.dialer.data.RecentCall
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -42,7 +43,9 @@ enum class RecentsFilter { ALL, MISSED }
 fun RecentsScreen(
     refreshKey: Int,
     onCall: (String) -> Unit,
-    onStatus: (String) -> Unit
+    onStatus: (String) -> Unit,
+    // v1.8: the way back to permissions after "Continue without it".
+    onRequestPermissions: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -52,14 +55,32 @@ fun RecentsScreen(
     var details by remember { mutableStateOf<RecentCall?>(null) }
     var loading by remember { mutableStateOf(true) }
 
+    // v1.8: loads are serialized — overlapping loads used to leave stale
+    // data or a stuck spinner.
+    var loadJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     fun load() {
-        scope.launch {
+        loadJob?.cancel()
+        loadJob = scope.launch {
             loading = true
-            recents = withContext(Dispatchers.IO) { CallRepo.loadRecents(context) }
-            loading = false
+            try {
+                val data = withContext(Dispatchers.IO) { CallRepo.loadRecents(context) }
+                if (isActive) recents = data
+            } finally {
+                if (isActive) loading = false
+            }
         }
     }
     LaunchedEffect(refreshKey) { load() }
+    // v1.8: reload on resume too — a call made, a contact added or a
+    // permission granted in Settings used to be invisible until restart.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) load()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val shown = remember(recents, filter) {
         if (filter == RecentsFilter.MISSED) recents.filter { it.type == CallLog.Calls.MISSED_TYPE }
@@ -103,6 +124,8 @@ fun RecentsScreen(
                             "Allow access to the call log to see your recent calls here.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        Spacer(Modifier.height(16.dp))
+                        Button(onClick = onRequestPermissions) { Text("Allow access") }
                     }
                 }
             }
@@ -127,12 +150,23 @@ fun RecentsScreen(
 
     // Long-press menu.
     selected?.let { call ->
+        // v1.8: isBlocked/canBlockNumbers are provider/IPC calls — they
+        // were queried on the main thread during composition, janking the
+        // sheet open. Load them off-thread; the label updates when ready.
+        var blocked by remember(call) { mutableStateOf(false) }
+        var canBlock by remember(call) { mutableStateOf(false) }
+        LaunchedEffect(call) {
+            val pair = withContext(Dispatchers.IO) {
+                CallRepo.isBlocked(context, call.number) to CallRepo.canBlockNumbers(context)
+            }
+            blocked = pair.first
+            canBlock = pair.second
+        }
         ModalBottomSheet(onDismissRequest = { selected = null }) {
             Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp).padding(bottom = 24.dp)) {
                 Text(call.name ?: PhoneUtils.prettyNumber(call.number), fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(PhoneUtils.prettyNumber(call.number), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
-                val blocked = CallRepo.isBlocked(context, call.number)
                 MenuRow(Icons.Filled.Call, "Call back") { selected = null; onCall(call.number) }
                 MenuRow(Icons.Filled.ContentCopy, "Copy number") {
                     selected = null
@@ -151,15 +185,22 @@ fun RecentsScreen(
                         onStatus("Couldn't open contacts")
                     }
                 }
-                if (CallRepo.canBlockNumbers(context)) {
+                if (canBlock) {
+                    // v1.8: the icon was Icons.Filled.Block in BOTH states,
+                    // and a failed (un)block blamed the default-dialer role
+                    // even when the row was only shown because blocking is
+                    // allowed. Both are fixed here.
                     MenuRow(
-                        if (blocked) Icons.Filled.Block else Icons.Filled.Block,
+                        if (blocked) Icons.Filled.RemoveCircleOutline else Icons.Filled.Block,
                         if (blocked) "Unblock number" else "Block number"
                     ) {
                         selected = null
                         scope.launch {
                             val ok = CallRepo.setBlocked(context, call.number, !blocked)
-                            onStatus(if (ok) (if (blocked) "Number unblocked" else "Number blocked") else "Blocking needs NOVA Dialer set as default")
+                            onStatus(
+                                if (ok) (if (blocked) "Number unblocked" else "Number blocked")
+                                else (if (blocked) "Couldn't unblock this number" else "Couldn't block this number")
+                            )
                             load()
                         }
                     }
@@ -185,7 +226,9 @@ fun RecentsScreen(
                     Text(PhoneUtils.prettyNumber(call.number))
                     Spacer(Modifier.height(8.dp))
                     Text(callTypeLabel(call.type))
-                    Text("Duration ${PhoneUtils.formatDuration(call.durationSeconds)}")
+                    // v1.8: missed calls have no duration — showing
+                    // "Duration 0:00" for them was meaningless.
+                    if (call.durationSeconds > 0) Text("Duration ${PhoneUtils.formatDuration(call.durationSeconds)}")
                     Text(PhoneUtils.relativeTime(call.date))
                     call.simLabel?.let { Text("SIM: $it") }
                 }

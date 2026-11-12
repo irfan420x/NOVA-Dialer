@@ -80,6 +80,9 @@ object CallRepo {
                 val labels = simLabels(context)
                 while (c.moveToNext() && out.size < limit) {
                     val number = c.getString(numI) ?: continue
+                    // v1.7: skip unknown/private entries ("", "-1", "-2") —
+                    // they rendered as blank rows that couldn't be called.
+                    if (number.isBlank() || number == "-1" || number == "-2") continue
                     out += RecentCall(
                         id = c.getLong(idI),
                         number = number,
@@ -103,10 +106,11 @@ object CallRepo {
         return try {
             val placeholders = ids.joinToString(",") { "?" }
             val args = ids.map { it.toString() }.toTypedArray()
+            // v1.7: return whether anything was actually deleted — the old
+            // code returned true even when 0 rows matched.
             context.contentResolver.delete(
                 CallLog.Calls.CONTENT_URI, "${CallLog.Calls._ID} IN ($placeholders)", args
-            )
-            true
+            ) > 0
         } catch (e: Exception) {
             ErrorLog.log(context, "Recents", "Failed to delete call log entries", e)
             false
@@ -115,6 +119,9 @@ object CallRepo {
 
     fun clearMissedCalls(context: Context): Boolean {
         return try {
+            // v1.7: deleting 0 rows (no missed calls) is not a failure, but
+            // a failed delete must not report success — the caller checks
+            // the count, so return true only when the delete ran.
             context.contentResolver.delete(
                 CallLog.Calls.CONTENT_URI,
                 "${CallLog.Calls.TYPE} = ?", arrayOf(CallLog.Calls.MISSED_TYPE.toString())

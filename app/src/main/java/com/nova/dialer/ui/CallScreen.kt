@@ -83,6 +83,12 @@ private fun CallScreenContent(onFinish: () -> Unit) {
     val name = details.callerDisplayName?.takeIf { it.isNotBlank() } ?: number
     val state = call.state
 
+    // v1.7: Back during a call must NOT close the in-call screen — before
+    // this, pressing Back left the call running with no UI, no notification
+    // and no way to mute or end it. The ongoing-call notification (posted
+    // by NovaInCallService) is the way back if the user leaves via Home.
+    androidx.activity.compose.BackHandler { }
+
     // Call timer: starts the moment the call becomes active and keeps
     // counting through hold — it only stops when the call disconnects.
     var activeSince by remember { mutableStateOf<Long?>(null) }
@@ -179,6 +185,24 @@ private fun CallScreenContent(onFinish: () -> Unit) {
         } else {
             // Active / dialing: mute, speaker, hold, keypad, add call, end.
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                // v1.7: call waiting — when a second call exists, show a
+                // switch button that holds this call and resumes the other.
+                val other = CallStateHolder.secondaryCall
+                if (other != null) {
+                    val otherNumber = other.details.handle?.schemeSpecificPart ?: "Unknown"
+                    val otherName = other.details.callerDisplayName?.takeIf { it.isNotBlank() } ?: otherNumber
+                    OutlinedButton(onClick = {
+                        safe("switch calls") {
+                            call.hold()
+                            other.unhold()
+                        }
+                    }) {
+                        Icon(Icons.Filled.SwapCalls, "Switch call")
+                        Spacer(Modifier.width(8.dp))
+                        Text("Switch to $otherName")
+                    }
+                    Spacer(Modifier.height(16.dp))
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     CallActionButton(Icons.Filled.MicOff, "Mute", muted) {
                         muted = !muted

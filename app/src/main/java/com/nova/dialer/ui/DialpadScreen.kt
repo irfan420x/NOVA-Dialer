@@ -158,7 +158,13 @@ fun DialpadScreen(
                         onClick = { press(c) },
                         onLongClick = {
                             when (c) {
-                                '0' -> { onNumberChange(number + "+"); playTone(c) }
+                                // v1.7: "+" only makes sense at the start —
+                                // long-pressing 0 after "017" used to make
+                                // "017+", an invalid dial string.
+                                '0' -> {
+                                    if (number.isEmpty()) { onNumberChange("+"); playTone(c) }
+                                    else press(c)
+                                }
                                 '1' -> {
                                     val vm = CallRepo.voicemailNumber(context)
                                     if (vm.isNullOrBlank()) onStatus("No voicemail number on this phone")

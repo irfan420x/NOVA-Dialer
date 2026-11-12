@@ -39,11 +39,19 @@ object PhoneUtils {
      * v1.6: the number comparison normalizes the Bangladeshi forms first —
      * a contact stored as +8801712… now matches typed 01712… (the local
      * form the user actually dials), and vice versa.
+     *
+     * v1.7: the prefix is stripped UNCONDITIONALLY. The v1.6 version only
+     * stripped it for strings longer than 10 chars, so while the user was
+     * still typing ("01712") the typed side kept its 0 and the stored side
+     * had lost it — suggestions stayed empty at every step (a regression
+     * proven by unit tests). A normalized typed string shorter than 2 digits
+     * matches almost every number, so it matches nothing.
      */
     fun t9Matches(name: String, number: String, digits: String): Boolean {
         if (digits.isEmpty()) return false
         val stored = normalizeForMatch(digitsOnly(number))
         val typed = normalizeForMatch(digits)
+        if (typed.isEmpty() || typed.length < 2) return false
         if (stored.contains(typed) || typed.contains(stored)) return true
         val words = name.lowercase().split(Regex("[^a-z0-9]+")).filter { it.isNotEmpty() }
         return words.any { t9Code(it).startsWith(digits) }
@@ -52,12 +60,14 @@ object PhoneUtils {
     /**
      * Normalize a dialed/stored number for comparison: +8801712… and
      * 01712… and 8801712… all become "1712…". (Bangladesh country code 880.)
+     * Stripping is unconditional — a length guard broke progressive
+     * matching while the user was still typing (v1.7).
      */
     fun normalizeForMatch(digits: String): String {
         val d = digits.removePrefix("+")
         return when {
-            d.startsWith("880") && d.length > 10 -> d.removePrefix("880")
-            d.startsWith("0") && d.length > 10 -> d.removePrefix("0")
+            d.startsWith("880") -> d.removePrefix("880")
+            d.startsWith("0") -> d.removePrefix("0")
             else -> d
         }
     }

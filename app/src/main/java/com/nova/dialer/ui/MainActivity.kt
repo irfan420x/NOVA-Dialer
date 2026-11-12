@@ -334,8 +334,18 @@ fun NovaApp(initialDialNumber: String) {
                                         }
                                     }
                                     Row {
-                                        TextButton(onClick = { pickSim(sim, false) }) { Text("Once") }
-                                        TextButton(onClick = { pickSim(sim, true) }) { Text("Always") }
+                                        // v1.7: in "Default SIM" mode (no
+                                        // number being called) "Once" did
+                                        // nothing — there is no call to make
+                                        // once. There the tap sets the
+                                        // default directly; in call mode it
+                                        // calls once without saving.
+                                        if (calling != null) {
+                                            TextButton(onClick = { pickSim(sim, false) }) { Text("Once") }
+                                        }
+                                        TextButton(onClick = { pickSim(sim, true) }) {
+                                            Text(if (calling != null) "Always" else "Set default")
+                                        }
                                     }
                                 }
                             }

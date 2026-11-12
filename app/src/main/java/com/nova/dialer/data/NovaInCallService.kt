@@ -1,6 +1,8 @@
 package com.nova.dialer.data
 
+import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.telecom.Call
 import android.telecom.InCallService
 import com.nova.dialer.ui.CallActivity
@@ -32,9 +34,22 @@ object CallStateHolder {
     /** The call the user is talking to right now (or the first one). */
     val primaryCall: Call?
         get() = _calls.value.firstOrNull {
+            // v1.7: a RINGING call wins over an active one — before this,
+            // a second incoming call during a call could never be answered,
+            // because the active call was always primary and the ringing
+            // call never got Answer/Decline buttons.
+            it.state == Call.STATE_RINGING
+        } ?: _calls.value.firstOrNull {
             it.state == Call.STATE_ACTIVE || it.state == Call.STATE_DIALING ||
-                it.state == Call.STATE_RINGING || it.state == Call.STATE_CONNECTING
+                it.state == Call.STATE_CONNECTING
         } ?: _calls.value.firstOrNull()
+
+    /** The other call, if any (for the call-waiting switch button). */
+    val secondaryCall: Call?
+        get() {
+            val primary = primaryCall ?: return null
+            return _calls.value.firstOrNull { it != primary }
+        }
 }
 
 /**
@@ -51,6 +66,8 @@ class NovaInCallService : InCallService() {
     companion object {
         var instance: NovaInCallService? = null
             private set
+
+        private const val CALL_NOTIFICATION_ID = 1001
     }
 
     override fun onCreate() {
@@ -67,15 +84,18 @@ class NovaInCallService : InCallService() {
         val cb = object : Call.Callback() {
             override fun onStateChanged(call: Call, state: Int) {
                 CallStateHolder.refresh()
+                updateCallNotification()
             }
 
             override fun onDetailsChanged(call: Call, details: Call.Details) {
                 CallStateHolder.refresh()
+                updateCallNotification()
             }
         }
         call.registerCallback(cb)
         callbacks[call] = cb
         CallStateHolder.add(call)
+        updateCallNotification()
         // Bring the in-call screen to the front.
         val intent = Intent(this, CallActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -90,5 +110,54 @@ class NovaInCallService : InCallService() {
     override fun onCallRemoved(call: Call) {
         callbacks.remove(call)?.let { call.unregisterCallback(it) }
         CallStateHolder.remove(call)
+        updateCallNotification()
+    }
+
+    /**
+     * v1.7: an ongoing-call notification, so the user can always get back
+     * to the in-call screen. Without it, pressing Back during a call left
+     * the call running with no UI and no way to mute or end it.
+     */
+    private fun updateCallNotification() {
+        val calls = CallStateHolder.calls.value
+        if (calls.isEmpty()) {
+            (getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager)
+                .cancel(CALL_NOTIFICATION_ID)
+            return
+        }
+        val primary = CallStateHolder.primaryCall
+        val number = primary?.details?.handle?.schemeSpecificPart ?: "Unknown"
+        val name = primary?.details?.callerDisplayName?.takeIf { it.isNotBlank() } ?: number
+        val channelId = "nova_ongoing_call"
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = android.app.NotificationChannel(
+                channelId, "Ongoing call", android.app.NotificationManager.IMPORTANCE_LOW
+            ).apply { description = "Shows the current call so you can return to it" }
+            nm.createNotificationChannel(channel)
+        }
+        val intent = Intent(this, CallActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pending = android.app.PendingIntent.getActivity(
+            this, 0, intent,
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        // Platform Notification.Builder (no androidx dependency needed).
+        val notification = android.app.Notification.Builder(this, channelId)
+            .setSmallIcon(android.R.drawable.sym_action_call)
+            .setContentTitle("On call — $name")
+            .setContentText("Tap to return to the call")
+            .setContentIntent(pending)
+            .setOngoing(true)
+            .setCategory(android.app.Notification.CATEGORY_CALL)
+            .build()
+        try {
+            nm.notify(CALL_NOTIFICATION_ID, notification)
+        } catch (e: Exception) {
+            // No notification permission (API 33+) — the in-call screen
+            // itself still works; the BackHandler keeps it from being lost.
+            ErrorLog.log(applicationContext, "InCall", "Couldn't post call notification", e)
+        }
     }
 }

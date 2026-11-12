@@ -97,12 +97,26 @@ fun RecentsScreen(
                 FilterChip(
                     selected = filter == RecentsFilter.ALL,
                     onClick = { filter = RecentsFilter.ALL },
-                    label = { Text("All") }
+                    label = { Text("All") },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = Color.White,
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 )
                 FilterChip(
                     selected = filter == RecentsFilter.MISSED,
                     onClick = { filter = RecentsFilter.MISSED },
-                    label = { Text("Missed") }
+                    label = { Text("Missed") },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                        selectedLabelColor = Color.White,
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 )
             }
             if (filter == RecentsFilter.MISSED && shown.isNotEmpty()) {
@@ -118,6 +132,12 @@ fun RecentsScreen(
             !CallRepo.hasCallLogPermission(context) -> {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
+                        // v1.9: Nebula empty state — icon in a gradient circle.
+                        Box(
+                            Modifier.size(64.dp).clip(CircleShape).background(NovaGradientBrush),
+                            contentAlignment = Alignment.Center
+                        ) { Icon(Icons.Filled.History, null, Modifier.size(28.dp), tint = Color.White) }
+                        Spacer(Modifier.height(16.dp))
                         Text("Call history needs permission", fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(8.dp))
                         Text(
@@ -131,10 +151,17 @@ fun RecentsScreen(
             }
             loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             shown.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    if (filter == RecentsFilter.MISSED) "No missed calls" else "No recent calls",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        Modifier.size(64.dp).clip(CircleShape).background(NovaGradientBrush),
+                        contentAlignment = Alignment.Center
+                    ) { Icon(Icons.Filled.History, null, Modifier.size(28.dp), tint = Color.White) }
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        if (filter == RecentsFilter.MISSED) "No missed calls" else "No recent calls",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             else -> LazyColumn(Modifier.fillMaxSize()) {
                 items(shown, key = { it.id }) { call ->
@@ -299,7 +326,9 @@ private fun RecentRow(call: RecentCall, onClick: () -> Unit, onLongClick: () -> 
             }
         },
         trailingContent = {
-            IconButton(onClick = onClick) { Icon(Icons.Filled.Call, "Call back") }
+            IconButton(onClick = onClick) {
+                Icon(Icons.Filled.Call, "Call back", tint = MaterialTheme.colorScheme.primary)
+            }
         },
         modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
     )

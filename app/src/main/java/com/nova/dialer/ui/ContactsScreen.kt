@@ -20,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -90,13 +91,19 @@ fun ContactsScreen(
 
     Scaffold(
         floatingActionButton = {
-            FloatingActionButton(onClick = {
-                val intent = Intent(Intent.ACTION_INSERT, ContactsContract.Contacts.CONTENT_URI)
-                try { context.startActivity(intent) } catch (e: Exception) {
-                    ErrorLog.log(context, "Contacts", "Failed to open new-contact editor", e)
-                    onStatus("Couldn't open contacts")
-                }
-            }) { Icon(Icons.Filled.PersonAdd, "Add contact") }
+            FloatingActionButton(
+                onClick = {
+                    val intent = Intent(Intent.ACTION_INSERT, ContactsContract.Contacts.CONTENT_URI)
+                    try { context.startActivity(intent) } catch (e: Exception) {
+                        ErrorLog.log(context, "Contacts", "Failed to open new-contact editor", e)
+                        onStatus("Couldn't open contacts")
+                    }
+                },
+                // v1.9: Nebula gradient FAB (16dp), white icon.
+                modifier = Modifier.background(NovaGradientBrush, RoundedCornerShape(16.dp)),
+                shape = RoundedCornerShape(16.dp),
+                containerColor = Color.Transparent
+            ) { Icon(Icons.Filled.PersonAdd, "Add contact", tint = Color.White) }
         }
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
@@ -108,12 +115,26 @@ fun ContactsScreen(
                     if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, "Clear") }
                 },
                 singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                    cursorColor = MaterialTheme.colorScheme.primary
+                ),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
             )
             when {
                 !CallRepo.hasContactsPermission(context) -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
+                            // v1.9: Nebula empty state — icon in a gradient circle.
+                            Box(
+                                Modifier.size(64.dp).clip(CircleShape).background(NovaGradientBrush),
+                                contentAlignment = Alignment.Center
+                            ) { Icon(Icons.Filled.Contacts, null, Modifier.size(28.dp), tint = Color.White) }
+                            Spacer(Modifier.height(16.dp))
                             Text("Contacts need permission", fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(8.dp))
                             Text(
@@ -127,10 +148,17 @@ fun ContactsScreen(
                 }
                 loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 filtered.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        if (searching) "No contacts match \"$query\"" else "No contacts yet",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            Modifier.size(64.dp).clip(CircleShape).background(NovaGradientBrush),
+                            contentAlignment = Alignment.Center
+                        ) { Icon(Icons.Filled.PersonSearch, null, Modifier.size(28.dp), tint = Color.White) }
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            if (searching) "No contacts match \"$query\"" else "No contacts yet",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 else -> LazyColumn(Modifier.fillMaxSize()) {
                     if (!searching && favorites.isNotEmpty()) {
@@ -177,12 +205,15 @@ fun ContactsScreen(
                             leadingContent = { ContactPhoto(c, 48) },
                             trailingContent = {
                                 Row {
+                                    // v1.9: favorites use the Nebula pink accent.
                                     if (c.starred) Icon(
                                         Icons.Filled.Star, "Favorite",
-                                        tint = MaterialTheme.colorScheme.primary,
+                                        tint = NovaTertiary,
                                         modifier = Modifier.size(20.dp)
                                     )
-                                    IconButton(onClick = { onCall(c.number) }) { Icon(Icons.Filled.Call, "Call") }
+                                    IconButton(onClick = { onCall(c.number) }) {
+                                        Icon(Icons.Filled.Call, "Call", tint = MaterialTheme.colorScheme.primary)
+                                    }
                                 }
                             },
                             modifier = Modifier.combinedClickable(
@@ -216,7 +247,10 @@ fun ContactsScreen(
                                 } else onStatus("Couldn't update favorite")
                             }
                         }) {
-                            Icon(if (starred) Icons.Filled.Star else Icons.Filled.StarBorder, null)
+                            Icon(
+                                if (starred) Icons.Filled.Star else Icons.Filled.StarBorder, null,
+                                tint = NovaTertiary
+                            )
                             Spacer(Modifier.width(4.dp))
                             Text(if (starred) "Favorited" else "Favorite")
                         }

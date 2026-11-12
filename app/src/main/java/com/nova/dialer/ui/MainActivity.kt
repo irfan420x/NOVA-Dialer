@@ -15,13 +15,19 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -300,25 +306,29 @@ fun NovaApp(dialNumberFlow: MutableStateFlow<String>) {
                     )
                 },
                 bottomBar = {
-                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                        NavigationBarItem(
-                            selected = tab == DialerTab.KEYPAD,
-                            onClick = { tab = DialerTab.KEYPAD },
-                            icon = { Icon(Icons.Filled.Dialpad, null) },
-                            label = { Text("Keypad") }
-                        )
-                        NavigationBarItem(
-                            selected = tab == DialerTab.RECENTS,
-                            onClick = { tab = DialerTab.RECENTS; recentsRefreshKey++ },
-                            icon = { Icon(Icons.Filled.History, null) },
-                            label = { Text("Recents") }
-                        )
-                        NavigationBarItem(
-                            selected = tab == DialerTab.CONTACTS,
-                            onClick = { tab = DialerTab.CONTACTS },
-                            icon = { Icon(Icons.Filled.Contacts, null) },
-                            label = { Text("Contacts") }
-                        )
+                    // v1.9: Nebula tab bar — the selected tab sits in a
+                    // violet→blue gradient pill; unselected tabs are muted.
+                    Surface(color = MaterialTheme.colorScheme.surface) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            NebulaTab(
+                                tab = DialerTab.KEYPAD, selectedTab = tab,
+                                icon = Icons.Filled.Dialpad, label = "Keypad",
+                                onClick = { tab = DialerTab.KEYPAD }
+                            )
+                            NebulaTab(
+                                tab = DialerTab.RECENTS, selectedTab = tab,
+                                icon = Icons.Filled.History, label = "Recents",
+                                onClick = { tab = DialerTab.RECENTS; recentsRefreshKey++ }
+                            )
+                            NebulaTab(
+                                tab = DialerTab.CONTACTS, selectedTab = tab,
+                                icon = Icons.Filled.Contacts, label = "Contacts",
+                                onClick = { tab = DialerTab.CONTACTS }
+                            )
+                        }
                     }
                 }
             ) { padding ->
@@ -433,6 +443,46 @@ fun NovaApp(dialNumberFlow: MutableStateFlow<String>) {
                     }
                 )
             }
+        }
+    }
+}
+
+// v1.9: Nebula tab bar item — selected tab in a gradient pill (12dp),
+// unselected tabs in muted lavender-grey.
+@Composable
+private fun NebulaTab(
+    tab: DialerTab,
+    selectedTab: DialerTab,
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    val selected = tab == selectedTab
+    Box(
+        Modifier.clip(RoundedCornerShape(12.dp))
+            .then(
+                if (selected) Modifier.background(NovaGradientBrush)
+                else Modifier.background(Color.Transparent)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                icon, null,
+                tint = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp)
+            )
+            Text(
+                label,
+                color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                style = MaterialTheme.typography.labelLarge
+            )
         }
     }
 }

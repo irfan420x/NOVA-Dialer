@@ -46,6 +46,15 @@ Minimum SDK 29 (Android 10), target SDK 35.
 
 ## Version history
 
+- **v1.9** — Nebula Dark Premium style pass (style only, no behavior
+  changes): dark-first space theme is now the default — deep navy-black
+  background (#0A0C1C), violet primary (#8B5CF6), violet→blue gradient on
+  the call button, the active-tab pill, the Contacts FAB and hero avatars;
+  keypad keys, list rows and dialogs use the new surface tokens with 1dp
+  outline borders and 20dp cards / 14dp buttons; filter chips are 12dp
+  pills; favorites use the pink accent; empty states show an icon in a
+  gradient circle. The light theme is kept, restyled with soft surfaces
+  (#F4F5FB background, white cards, same violet primary).
 - **v1.8** — Final audit: contacts name search no longer returns every
   contact (an empty digit query matched all numbers); the keypad no longer
   shows the wrong contact name (the `endsWith` fallback matched any number

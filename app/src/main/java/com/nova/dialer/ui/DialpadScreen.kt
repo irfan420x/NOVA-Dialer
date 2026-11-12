@@ -19,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -184,19 +185,19 @@ fun DialpadScreen(
             }
             Spacer(Modifier.height(8.dp))
         }
-        // Call button.
+        // Call button — Nebula gradient circle.
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-            FilledIconButton(
-                onClick = {
-                    when {
-                        number.isNotBlank() -> onCall(number)
-                        lastDialed != null -> { onNumberChange(lastDialed); onStatus("Last number: $lastDialed") }
-                        else -> onStatus("Type a number first")
-                    }
-                },
-                modifier = Modifier.size(72.dp),
-                colors = IconButtonDefaults.filledIconButtonColors(containerColor = NovaGood)
-            ) { Icon(Icons.Filled.Call, "Call", Modifier.size(32.dp), tint = MaterialTheme.colorScheme.onPrimary) }
+            Box(
+                Modifier.size(72.dp).clip(CircleShape).background(NovaGradientBrush)
+                    .clickable {
+                        when {
+                            number.isNotBlank() -> onCall(number)
+                            lastDialed != null -> { onNumberChange(lastDialed); onStatus("Last number: $lastDialed") }
+                            else -> onStatus("Type a number first")
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) { Icon(Icons.Filled.Call, "Call", Modifier.size(32.dp), tint = Color.White) }
         }
         Spacer(Modifier.height(8.dp))
         Text(

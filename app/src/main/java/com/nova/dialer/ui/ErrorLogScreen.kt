@@ -3,6 +3,7 @@ package com.nova.dialer.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -63,7 +64,11 @@ fun ErrorLogScreen(onBack: () -> Unit) {
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     itemsIndexed(entries, key = { index, _ -> index }) { _, e ->
-                        Card(Modifier.fillMaxWidth()) {
+                        // v1.9: Nebula card — 20dp radius (theme shape) + 1dp outline border.
+                        Card(
+                            Modifier.fillMaxWidth(),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                        ) {
                             Text(e, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
                         }
                     }

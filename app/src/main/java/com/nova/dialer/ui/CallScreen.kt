@@ -165,8 +165,9 @@ private fun CallScreenContent(onFinish: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(Modifier.height(48.dp))
+        // v1.9: Nebula gradient hero avatar.
         Box(
-            Modifier.size(96.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+            Modifier.size(96.dp).clip(CircleShape).background(NovaGradientBrush),
             contentAlignment = Alignment.Center
         ) {
             Text(
